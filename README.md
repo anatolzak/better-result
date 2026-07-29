@@ -355,23 +355,23 @@ const result = await Result.tryPromise(() => fetch(url), {
     times: 3,
     delayMs: 100,
     backoff: "exponential",
-    jitter: true, // full jitter: delay is uniform in [0, baseDelay]
+    jitter: true, // full jitter: delay is uniform in [0, baseDelay)
   },
 });
 ```
 
-Pass a number between `0` and `1` to control how much of the base delay is randomized:
+Pass a number from `0` through `1` to control how much of the base delay is randomized:
 
 ```ts
 retry: {
   times: 3,
   delayMs: 100,
   backoff: "exponential",
-  jitter: 0.3, // delay uniform in [0.7 * baseDelay, baseDelay]
+  jitter: 0.3, // delay uniform in [0.7 * baseDelay, baseDelay)
 }
 ```
 
-`jitter: true` is equivalent to `jitter: 1`.
+`jitter: true` is equivalent to `jitter: 1`. Values outside the inclusive range from `0` to `1`, including `NaN` and infinities, throw a `Panic` before the first attempt.
 
 ## UnhandledException
 

@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   Result,
   Ok,
@@ -688,6 +688,104 @@ describe("Result", () => {
       expect(attempts).toBe(3);
       // exponential: 10ms + 20ms = 30ms minimum
       expect(elapsed).toBeGreaterThanOrEqual(25);
+    });
+
+    describe("retry jitter", () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      const recordRetryDelays = (): number[] => {
+        const delays: number[] = [];
+        const clearedTimeout = setTimeout(() => {}, 0);
+        clearTimeout(clearedTimeout);
+        vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, delay) => {
+          delays.push(delay ?? 0);
+          if (typeof handler === "function") handler();
+          return clearedTimeout;
+        });
+        return delays;
+      };
+
+      it.each([true, 1] as const)(
+        "applies full jitter for %s without exceeding the base delay",
+        async (jitter) => {
+          const delays = recordRetryDelays();
+          vi.spyOn(Math, "random").mockReturnValue(0.25);
+          let attempts = 0;
+
+          const pending = Result.tryPromise(
+            () => {
+              attempts++;
+              return attempts === 1
+                ? Promise.reject(new Error("fail"))
+                : Promise.resolve("success");
+            },
+            { retry: { times: 1, delayMs: 100, backoff: "constant", jitter } },
+          );
+
+          await expect(pending).resolves.toMatchObject({ status: "ok", value: "success" });
+          expect(attempts).toBe(2);
+          expect(delays).toEqual([25]);
+        },
+      );
+
+      it("uses a numeric jitter factor as the maximum delay reduction", async () => {
+        const delays = recordRetryDelays();
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+        let attempts = 0;
+
+        const pending = Result.tryPromise(
+          () => {
+            attempts++;
+            return attempts === 1 ? Promise.reject(new Error("fail")) : Promise.resolve("success");
+          },
+          { retry: { times: 1, delayMs: 100, backoff: "constant", jitter: 0.5 } },
+        );
+
+        await expect(pending).resolves.toMatchObject({ status: "ok", value: "success" });
+        expect(attempts).toBe(2);
+        expect(delays).toEqual([75]);
+      });
+
+      it.each([false, 0] as const)("disables jitter for %s", async (jitter) => {
+        const delays = recordRetryDelays();
+        const random = vi.spyOn(Math, "random");
+        let attempts = 0;
+
+        const pending = Result.tryPromise(
+          () => {
+            attempts++;
+            return attempts === 1 ? Promise.reject(new Error("fail")) : Promise.resolve("success");
+          },
+          { retry: { times: 1, delayMs: 100, backoff: "constant", jitter } },
+        );
+
+        await expect(pending).resolves.toMatchObject({ status: "ok", value: "success" });
+        expect(attempts).toBe(2);
+        expect(delays).toEqual([100]);
+        expect(random).not.toHaveBeenCalled();
+      });
+
+      it.each([-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY])(
+        "panics before execution when jitter is outside [0, 1]: %s",
+        async (jitter) => {
+          let attempts = 0;
+
+          const pending = Result.tryPromise(
+            () => {
+              attempts++;
+              return Promise.resolve("success");
+            },
+            { retry: { times: 1, delayMs: 100, backoff: "constant", jitter } },
+          );
+
+          await expect(pending).rejects.toThrow(
+            "Result.tryPromise retry jitter must be a finite number between 0 and 1",
+          );
+          expect(attempts).toBe(0);
+        },
+      );
     });
 
     it("passes 1-based attempt context to function overload", async () => {

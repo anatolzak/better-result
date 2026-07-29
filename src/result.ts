@@ -115,8 +115,8 @@ type RetryConfig<E = unknown> = {
     shouldRetry?: (error: E, context: TryPromiseContext) => boolean;
     /**
      * Shortens each delay by a random amount so simultaneous retries don't fire in lockstep.
-     * The number is the maximum reduction — e.g. `0.3` may shave up to 30% off each delay.
-     * `true` allows full reduction (down to 0). Defaults to no jitter.
+     * A number from 0 through 1 is the maximum reduction — e.g. `0.3` may shave up to
+     * 30% off each delay. `true` allows full reduction (down to 0). Defaults to no jitter.
      */
     jitter?: boolean | number;
   };
@@ -171,7 +171,7 @@ const tryPromise: {
     return execute({ attempt: 1, signal: config?.signal });
   }
 
-  const getDelay = (retryAttempt: number): number => {
+  const getBaseDelay = (retryAttempt: number): number => {
     switch (retry.backoff) {
       case "constant":
         return retry.delayMs;
@@ -182,11 +182,16 @@ const tryPromise: {
     }
   };
 
+  const jitter = retry.jitter ?? false;
+  if (typeof jitter === "number" && (!Number.isFinite(jitter) || jitter < 0 || jitter > 1)) {
+    throw panic("Result.tryPromise retry jitter must be a finite number between 0 and 1");
+  }
+  const jitterFactor = jitter === true ? 1 : jitter === false ? 0 : jitter;
+
   const getDelay = (retryAttempt: number): number => {
     const baseDelay = getBaseDelay(retryAttempt);
-    if (!retry.jitter) return baseDelay;
-    const factor = retry.jitter === true ? 1 : Math.max(0, Math.min(1, retry.jitter));
-    return baseDelay * (1 - factor + Math.random() * factor);
+    if (jitterFactor === 0) return baseDelay;
+    return baseDelay * (1 - jitterFactor + Math.random() * jitterFactor);
   };
 
   const sleepForRetryDelay = (ms: number, signal?: AbortSignal): Promise<boolean> =>
@@ -938,6 +943,8 @@ export const Result = {
    * }, {
    *   retry: { times: 3, delayMs: 100, backoff: "exponential", shouldRetry: e => !e.rateLimited }
    * })
+   *
+   * @throws {Panic} When retry jitter is not a finite number between 0 and 1.
    */
   tryPromise,
   /**
